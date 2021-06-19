@@ -6,6 +6,82 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
+use wgpu::util::DeviceExt;
+
+// [repr(C)] : alternative representations: Rust allows you to specify alternative data layout strategies from the default
+
+// [derive(...)]: the compiler is capable of providing basic implementations for some traits via the #[derive]
+// * comparison traits: 'Eq', 'ParitalEq', 'Ord', 'PartialOrd'
+// * 'Clone', to create 'T' from '&T' via a copy
+// * 'Copy', to give a type 'copy semantics' instead of 'move semantics'
+// * 'Hash', to compute a hash from &T
+// * 'Default', to create an empty instance of a data type
+// * 'Debug', to format a value using the '{:?}' formatter
+
+// when you use [derive(bytemuck::Pod, bytemuck::Zeroable)], we do NOT need to implement these:
+// * unsafe impl bytemuck::Pod for Vertex {}
+// * unsafe impl bytemuck::Zeroable for Vertex {}
+
+// declare array in struct
+// * Vec<T>: (vector) dynamically sized; dynamically allocated on the heap
+// * [T; n]: (array) statically sized; lives on the stack
+// * [T]   : (slice) unsized; usually used from '&[T]'; this is a view into a contiguous set of 'T's in memory somewhere
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+// the 'a reads 'the lifetime a'; technically, every reference has some lifetime associated with it, but the compiler let you elide them in common cases
+
+impl Vertex {
+    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        
+        // describes how the vertex buffer is interpreted
+        wgpu::VertexBufferLayout {
+            // the stride in bytes, between elements of this buffer
+
+            // std::mem::sizeof::<Vertex>(): = sizeof(type)
+            // 'as' : cast between types or rename an import
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+
+            // 'step_mode' tells the pipeline how often it should move to the next vertex
+            // * we can specify 'wgpu::InputStepMode::Instance'
+            step_mode: wgpu::InputStepMode::Vertex,
+
+            // this list of attributes which comprise a single vertex
+            // * vertex attributes describe the individual parts of the vertex; generally 1:1 mapping with struct's fields
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0, 
+                    // this tells the shader what location to store this attribute at
+                    // * 'layout(location=0) in vec3 x' in the vertex shader would correspond to the position field of struct
+                    // * 'layout(location=1) in vec3 x' would be the color field
+                    shader_location: 0,
+
+                    // 'format' tells the shader the shape of the attribute
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    // offset of first VertexAttribute
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                }
+            ]
+        }
+    }
+}
+
+// we arrange the vertices in Ccw order
+const VERTICES: &[Vertex] = &[
+    Vertex { position: [0.0, 0.5, 0.0], color: [1.0, 0.0, 0.0] },
+    Vertex { position: [-0.5, -0.5, 0.0], color: [0.0, 1.0, 0.0] },
+    Vertex { position: [0.5, -0.5, 0.0], color: [0.0, 0.0, 1.0] },
+];
+
 struct State {
     // handle to presentable surface
     surface: wgpu::Surface,
@@ -33,6 +109,12 @@ struct State {
     // a 'render pipeline' object represents a graphics pipeline and its stages, binding, vertex buffers and targets
     // a 'render pipeline' may be created with [Device::create_render_pipeline]
     render_pipeline: wgpu::RenderPipeline,
+
+    // handle to a GPU-accessiable buffer
+    // created with ['Device::create_buffer'] or [DeviceExt::create_buffer_init](util::DeviceExt::create_buffer_init)
+    vertex_buffer: wgpu::Buffer,
+
+    num_vertices: u32,
 }
 
 impl State {
@@ -107,7 +189,9 @@ impl State {
                 entry_point: "main",
                 // the format of any vertex buffers used with this pipeline
                 // the 'buffers' field tells 'wgpu' what type of vertices we want to pass to the vertex shader
-                buffers: &[],
+                buffers: &[
+                    Vertex::desc(),
+                ],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -144,6 +228,19 @@ impl State {
             },
         });
 
+        // 'create_buffer_init' method on 'wgpu::Device' we'll have to import 'DeviceExt' extension trait
+        // * we use 'bytemuck' to cast our 'VERTICES' as a '&[u8]'
+        // * 'create_buffer_init()' method expects '&[u8]' and 'bytemuck::cast_slice' does that for us
+        let vertex_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(VERTICES),
+                usage: wgpu::BufferUsage::VERTEX,
+            }
+        );
+
+        let num_vertices = VERTICES.len() as u32;
+
         Self {
             surface,
             device,
@@ -152,6 +249,8 @@ impl State {
             size, 
             swap_chain,  
             render_pipeline,
+            vertex_buffer,
+            num_vertices,
         }
     }
 
@@ -210,8 +309,14 @@ impl State {
             // set the pipeline on the 'render_pass' using the one we just created
             render_pass.set_pipeline(&self.render_pipeline);
 
+            // 'set_vertex_buffer' takes two params:
+            // * the first is what buffer slot to use for this vertex buffer (you can have multiple buffers)
+            // * the second is the slice of the buffer to use; it allows us to specify which portion of the buffer to use
+            // * we use '..' to specify the entire buffer
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+
             // tell 'wgpu' to draw something with 3 vertices and 1 instance where '[[builtin(vertex_index)]]'
-            render_pass.draw(0..3, 0..1);
+            render_pass.draw(0..self.num_vertices, 0..1);
         }
 
         // submit will accept anything that implements IntoIter
