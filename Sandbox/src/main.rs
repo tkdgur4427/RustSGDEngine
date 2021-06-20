@@ -31,7 +31,7 @@ use wgpu::util::DeviceExt;
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
-    color: [f32; 3],
+    tex_coords: [f32; 2],
 }
 
 // the 'a reads 'the lifetime a'; technically, every reference has some lifetime associated with it, but the compiler let you elide them in common cases
@@ -68,7 +68,7 @@ impl Vertex {
                     // offset of first VertexAttribute
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x2,
                 }
             ]
         }
@@ -77,11 +77,11 @@ impl Vertex {
 
 // we arrange the vertices in Ccw order
 const VERTICES: &[Vertex] = &[
-    Vertex { position: [-0.0868241, 0.49240386, 0.0], color: [0.5, 0.0, 0.5] },
-    Vertex { position: [-0.49513406, 0.06958647, 0.0], color: [0.5, 0.0, 0.5] },
-    Vertex { position: [-0.21918549, -0.44939706, 0.0], color: [0.5, 0.0, 0.5] },
-    Vertex { position: [0.35966998, -0.3473291, 0.0], color: [0.5, 0.0, 0.5] },
-    Vertex { position: [0.44147372, 0.2347359, 0.0],color: [0.5, 0.0, 0.5] },
+    Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.99240386], },
+    Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.56958646], },
+    Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.050602943], },
+    Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.15267089], },
+    Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.7347359], },
 ];
 
 const INDICES: &[u16] = &[
@@ -123,11 +123,9 @@ struct State {
     // created with ['Device::create_buffer'] or [DeviceExt::create_buffer_init](util::DeviceExt::create_buffer_init)
     vertex_buffer: wgpu::Buffer,
 
-    num_vertices: u32,
-
     index_buffer: wgpu::Buffer,
-
     num_indices: u32,
+    diffuse_bind_group: wgpu::BindGroup,
 }
 
 impl State {
@@ -176,6 +174,131 @@ impl State {
 
         let swap_chain = device.create_swap_chain(&surface, &sc_desc);
 
+        // loading an image from a file
+
+        // include_bytes: includes a file as reference to a byte array
+        let diffuse_bytes = include_bytes!("happy-tree.png");
+        let diffuse_image = image::load_from_memory(diffuse_bytes).unwrap();
+        let diffuse_rgba = diffuse_image.as_rgba8().unwrap();
+
+        // save image dimensions as actual 'Texture'
+        use image::GenericImageView;
+        let dimensions = diffuse_image.dimensions();
+
+        let texture_size = wgpu::Extent3d {
+            width: dimensions.0,
+            height: dimensions.1,
+            depth_or_array_layers: 1,
+        };
+
+        let diffuse_texture = device.create_texture(
+            &wgpu::TextureDescriptor {
+                // all textures are stored as 3D, we represent our 2D texture by setting depth to 1
+                size: texture_size,
+                mip_level_count: 1, // we'll talk about this a little later
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                // SAMPLED tells wgpu that we want to use this texture in shaders
+                // COPY_DST means that we want to copy data to this texture
+                usage: wgpu::TextureUsage::SAMPLED | wgpu::TextureUsage::COPY_DST,
+                label: Some("diffuse_texture"),
+            }
+        );
+
+        // getting data into a Texture
+        // * the 'Texture' struct has no methods to interact with the data directly
+        // * we can use a method on the 'queue' we created earlier called 'write_texture' to load the texture in
+
+        queue.write_texture(
+            // tells wgpu where to copy the pixel data
+            wgpu::ImageCopyTexture {
+                texture: &diffuse_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+            },
+            // the actual pixel data
+            diffuse_rgba,
+            // the layout of the texture
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: std::num::NonZeroU32::new(4 * dimensions.0),
+                rows_per_image: std::num::NonZeroU32::new(dimensions.1),
+            },
+            texture_size,
+        );
+
+        // TextureViews and Samplers
+        // * a 'TextureView' offers us a view into our texture
+        // * a 'Sampler' controls how the 'Texture' is sampled
+
+        let diffuse_texture_view = diffuse_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let diffuse_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // the BindGroup
+        // * a 'BindGroup' describes a set of resources and how they can be accessed by a shader
+        // * we create a 'BindGroup' using a 'BindGroupLayout'
+
+        // 'texture_bind_group_layout' has two entries: one for a sampled texture at binding 0, and one for a sampler at binding 1.
+        // * bindings are visible only to the fragment shader specified by 'FRAGMENT'
+        // * any bitwise combination of 'NONE', 'VERTEX', 'FRAGMENT', or 'COMPUTE'
+        let texture_bind_group_layout = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    // describes a single binding inside a bind group
+                    wgpu::BindGroupLayoutEntry {
+                        // binding index; must match shader index and be unique inside a BindGroupLayout
+                        // * 'layout(set = 0, binding = 1) uniform' in shaders
+                        binding: 0,
+                        // which shader stages can see this binding
+                        visibility: wgpu::ShaderStage::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        // array size must be 1 or greater
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStage::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler {
+                            comparison: false,
+                            filtering: true,
+                        },
+                        count: None,
+                    }
+                ],
+                label: Some("texture_bind_group_layout"),
+            }
+        );
+
+        let diffuse_bind_group = device.create_bind_group(
+            &wgpu::BindGroupDescriptor {
+                layout: &texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&diffuse_texture_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
+                    }
+                ],
+                label: Some("diffuse_bind_group"),
+            }
+        );
+
         let shader = device.create_shader_module(&wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
             flags: wgpu::ShaderFlags::all(),
@@ -187,7 +310,7 @@ impl State {
         let render_pipeline_layout = 
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[],
+                bind_group_layouts: &[&texture_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -252,8 +375,6 @@ impl State {
             }
         );
 
-        let num_vertices = VERTICES.len() as u32;
-
         let index_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Index Buffer"),
@@ -273,9 +394,9 @@ impl State {
             swap_chain,  
             render_pipeline,
             vertex_buffer,
-            num_vertices,
             index_buffer,
             num_indices,
+            diffuse_bind_group,
         }
     }
 
@@ -333,6 +454,8 @@ impl State {
 
             // set the pipeline on the 'render_pass' using the one we just created
             render_pass.set_pipeline(&self.render_pipeline);
+
+            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
 
             // 'set_vertex_buffer' takes two params:
             // * the first is what buffer slot to use for this vertex buffer (you can have multiple buffers)
