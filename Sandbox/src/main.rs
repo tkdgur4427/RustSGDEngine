@@ -8,6 +8,8 @@ use winit::{
 
 use wgpu::util::DeviceExt;
 
+mod texture;
+
 // [repr(C)] : alternative representations: Rust allows you to specify alternative data layout strategies from the default
 
 // [derive(...)]: the compiler is capable of providing basic implementations for some traits via the #[derive]
@@ -126,6 +128,8 @@ struct State {
     index_buffer: wgpu::Buffer,
     num_indices: u32,
     diffuse_bind_group: wgpu::BindGroup,
+
+    diffuse_texture: texture::Texture,
 }
 
 impl State {
@@ -178,7 +182,9 @@ impl State {
 
         // include_bytes: includes a file as reference to a byte array
         let diffuse_bytes = include_bytes!("happy-tree.png");
-        let diffuse_image = image::load_from_memory(diffuse_bytes).unwrap();
+        let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png").unwrap();
+
+        /*
         let diffuse_rgba = diffuse_image.as_rgba8().unwrap();
 
         // save image dimensions as actual 'Texture'
@@ -242,6 +248,7 @@ impl State {
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
+        */
 
         // the BindGroup
         // * a 'BindGroup' describes a set of resources and how they can be accessed by a shader
@@ -288,11 +295,11 @@ impl State {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&diffuse_texture_view),
+                        resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
+                        resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
                     }
                 ],
                 label: Some("diffuse_bind_group"),
@@ -397,6 +404,7 @@ impl State {
             index_buffer,
             num_indices,
             diffuse_bind_group,
+            diffuse_texture,
         }
     }
 
