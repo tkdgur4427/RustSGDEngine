@@ -1,5 +1,18 @@
 // vertex shader
 
+// [[block]] the block decorator indicates this structure type represents the contents of a buffer resource occupying a single binding slot in shader's resource interface
+// * any structure used as a 'uniform' must be annotated with [[block]]
+[[block]]
+struct Uniforms {
+    view_proj: mat4x4<f32>;
+};
+
+// new bind group; we need to specify which one we're using in the shader
+// * the number is determined by our 'render_pipeline_layout'
+// * the 'texture_bind_group_layout' is listed first, thus it's 'group(0)', and 'uniform_bind_group' is second, so it's 'group(1)'
+[[group(1), binding(0)]]
+var<uniform> uniforms: Uniforms;
+
 struct VertexInput {
     [[location(0)]] position: vec3<f32>;
     [[location(1)]] tex_coords: vec2<f32>;
@@ -17,7 +30,10 @@ fn main(
 ) -> VertexOutput {
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;
-    out.clip_position = vec4<f32>(model.position, 1.0);
+
+    // multiplication order is important when it comes to matrices
+    // * the vector goes on right, the matrices gone on the left in order of importance
+    out.clip_position = uniforms.view_proj * vec4<f32>(model.position, 1.0);
     return out;
 }
 
