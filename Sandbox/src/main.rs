@@ -363,6 +363,9 @@ struct State {
     instances: Vec<Instance>,
     #[allow(dead_code)]
     instance_buffer: wgpu::Buffer,
+
+    // depth texture
+    depth_texture: texture::Texture,
 }
 
 impl State {
@@ -627,6 +630,8 @@ impl State {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
+        let depth_texture = texture::Texture::create_depth_texture(&device, &sc_desc, "depth_texture");
+
         let render_pipeline_layout = 
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
@@ -677,7 +682,14 @@ impl State {
                 // requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: texture::Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                // 'LESS' means pixels will be drawn front to back
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState {
                 // this determines how many samples this pipeline will use
                 count: 1,
@@ -729,6 +741,7 @@ impl State {
             uniform_bind_group,
             instances,
             instance_buffer,
+            depth_texture,
         }
     }
 
@@ -737,6 +750,8 @@ impl State {
         self.sc_desc.width = new_size.width;
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
+
+        self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.sc_desc, "depth_texture");
     }
 
     #[allow(unused_variables)]
@@ -783,7 +798,14 @@ impl State {
                         }
                     }
                 ],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: true,
+                    }),
+                    stencil_ops: None,
+                }),
             });
 
             // set the pipeline on the 'render_pass' using the one we just created
