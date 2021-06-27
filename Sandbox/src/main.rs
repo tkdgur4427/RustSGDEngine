@@ -18,6 +18,11 @@ const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(
 );
 
 mod texture;
+mod model;
+
+use model::DrawModel;
+use model::ModelVertex;
+use model::Vertex;
 
 // [repr(C)] : alternative representations: Rust allows you to specify alternative data layout strategies from the default
 
@@ -38,6 +43,7 @@ mod texture;
 // * [T; n]: (array) statically sized; lives on the stack
 // * [T]   : (slice) unsized; usually used from '&[T]'; this is a view into a contiguous set of 'T's in memory somewhere
 
+/*
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
@@ -101,6 +107,7 @@ const INDICES: &[u16] = &[
     2, 3, 4,
     0, // padding
 ];
+*/
 
 #[rustfmt::skip]
 pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
@@ -342,12 +349,13 @@ struct State {
 
     // handle to a GPU-accessiable buffer
     // created with ['Device::create_buffer'] or [DeviceExt::create_buffer_init](util::DeviceExt::create_buffer_init)
-    vertex_buffer: wgpu::Buffer,
+    //vertex_buffer: wgpu::Buffer,
 
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
+    //index_buffer: wgpu::Buffer,
+    //num_indices: u32,
+    
+    // diffuse texture
     diffuse_bind_group: wgpu::BindGroup,
-
     diffuse_texture: texture::Texture,
 
     // camera
@@ -366,6 +374,9 @@ struct State {
 
     // depth texture
     depth_texture: texture::Texture,
+
+    // obj model
+    obj_model: model::Model,
 }
 
 impl State {
@@ -569,9 +580,14 @@ impl State {
             }
         );
 
+        const SPACE_BETWEEN: f32 = 3.0;
         let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
             (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                let position = cgmath::Vector3 { x:x as f32, y: 0.0, z:z as f32} - INSTANCE_DISPLACEMENT;
+
+                let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+                let z = SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+
+                let position = cgmath::Vector3 { x, y: 0.0, z };
                 let rotation = if position.is_zero() {
                     // this is needed so an object at (0,0,0) wont get scaled to zero
                     // as quaternions can affect scale if they're not created correctly
@@ -654,7 +670,7 @@ impl State {
                 // the format of any vertex buffers used with this pipeline
                 // the 'buffers' field tells 'wgpu' what type of vertices we want to pass to the vertex shader
                 buffers: &[
-                    Vertex::desc(),
+                    ModelVertex::desc(),
                     InstanceRaw::desc(),
                 ],
             },
@@ -700,6 +716,7 @@ impl State {
             },
         });
 
+        /*
         // 'create_buffer_init' method on 'wgpu::Device' we'll have to import 'DeviceExt' extension trait
         // * we use 'bytemuck' to cast our 'VERTICES' as a '&[u8]'
         // * 'create_buffer_init()' method expects '&[u8]' and 'bytemuck::cast_slice' does that for us
@@ -720,6 +737,15 @@ impl State {
         );
 
         let num_indices = INDICES.len() as u32;
+        */
+
+        let res_dir = std::path::Path::new(env!("OUT_DIR")).join("res");
+        let obj_model = model::Model::load(
+            &device,
+            &queue,
+            &texture_bind_group_layout,
+            res_dir.join("cube.obj"),
+        ).unwrap();
 
         Self {
             surface,
@@ -729,9 +755,9 @@ impl State {
             size, 
             swap_chain,  
             render_pipeline,
-            vertex_buffer,
-            index_buffer,
-            num_indices,
+            //vertex_buffer,
+            //index_buffer,
+            //num_indices,
             diffuse_bind_group,
             diffuse_texture,
             camera,
@@ -742,6 +768,7 @@ impl State {
             instances,
             instance_buffer,
             depth_texture,
+            obj_model,
         }
     }
 
@@ -818,14 +845,18 @@ impl State {
             // * the first is what buffer slot to use for this vertex buffer (you can have multiple buffers)
             // * the second is the slice of the buffer to use; it allows us to specify which portion of the buffer to use
             // * we use '..' to specify the entire buffer
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            //render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
             // tell 'wgpu' to draw something with 3 vertices and 1 instance where '[[builtin(vertex_index)]]'
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+            //render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+
+            // Model Loading
+            render_pass.draw_mesh_instanced(
+                &self.obj_model.meshes[0], 0..self.instances.len() as u32);
         }
 
         // submit will accept anything that implements IntoIter

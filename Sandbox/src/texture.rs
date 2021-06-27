@@ -1,5 +1,6 @@
 use image::GenericImageView;
 use anyhow::*;
+use std::path::Path;
 
 pub struct Texture {
     pub texture: wgpu::Texture,
@@ -71,7 +72,10 @@ impl Texture {
         img: &image::DynamicImage,
         label: Option<&str>
     ) -> Result<Self> {
-        let rgba = img.as_rgba8().unwrap();
+
+        // PNGs work fine with 'as_rgba8()', but JPEGS dont have an alpha channel, and the code would panic if we try to call 'as_rgba8()'
+        // so we change it as 'to_rgba8()'
+        let rgba = img.to_rgba8();
         let dimensions = img.dimensions();
 
         let size = wgpu::Extent3d {
@@ -98,7 +102,7 @@ impl Texture {
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
             },
-            rgba,
+            &rgba,
             wgpu::ImageDataLayout {
                 offset: 0,
                 bytes_per_row: std::num::NonZeroU32::new(4 * dimensions.0),
@@ -121,5 +125,18 @@ impl Texture {
         );
 
         Ok(Self { texture, view, sampler })
+    }
+
+    pub fn load<P: AsRef<Path>>(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        path: P,
+    ) -> Result<Self> {
+        // needed to appease the borrow checker
+        let path_copy = path.as_ref().to_path_buf();
+        let label = path_copy.to_str();
+
+        let img = image::open(path)?;
+        Self::from_image(device, queue, &img, label)
     }
 }
