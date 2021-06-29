@@ -838,8 +838,8 @@ impl State {
             // set the pipeline on the 'render_pass' using the one we just created
             render_pass.set_pipeline(&self.render_pipeline);
 
-            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.uniform_bind_group, &[]);
+            //render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+            //render_pass.set_bind_group(1, &self.uniform_bind_group, &[]);
 
             // 'set_vertex_buffer' takes two params:
             // * the first is what buffer slot to use for this vertex buffer (you can have multiple buffers)
@@ -855,8 +855,13 @@ impl State {
             //render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
 
             // Model Loading
-            render_pass.draw_mesh_instanced(
-                &self.obj_model.meshes[0], 0..self.instances.len() as u32);
+            //let mesh = &self.obj_model.meshes[0];
+            //let material = &self.obj_model.materials[mesh.material];
+            //render_pass.draw_mesh_instanced(
+            //    mesh, material, 0..self.instances.len() as u32, &self.uniform_bind_group);
+
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.draw_model_instanced(&self.obj_model, 0..self.instances.len() as u32, &self.uniform_bind_group);
         }
 
         // submit will accept anything that implements IntoIter
